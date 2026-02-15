@@ -1,0 +1,12 @@
+{
+  "name": "x-auto-post",
+  "version": "1.0.0",
+  "description": "GitHub IssueからXへの自動投稿システム",
+  "private": true,
+  "scripts": {
+    "post": "node scripts/post-to-x.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

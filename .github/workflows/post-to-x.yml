@@ -1,0 +1,56 @@
+name: Post to X
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  post:
+    if: github.event.label.name == 'approved'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Post to X
+        id: post
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: node scripts/post-to-x.js
+
+      - name: On success - Add comment and update labels
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TWEET_URL=$(cat tweet_url.txt)
+          gh issue comment ${{ github.event.issue.number }} --body "投稿完了しました: $TWEET_URL"
+          gh issue edit ${{ github.event.issue.number }} --add-label "posted" --remove-label "approved"
+          gh issue close ${{ github.event.issue.number }}
+
+      - name: On failure - Add error comment and revert label
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ERROR_MSG="投稿に失敗しました。ログを確認してください。"
+          if [ -f error.txt ]; then
+            ERROR_MSG=$(cat error.txt)
+          fi
+          gh issue comment ${{ github.event.issue.number }} --body "エラー: $ERROR_MSG"
+          gh issue edit ${{ github.event.issue.number }} --add-label "pending" --remove-label "approved"
