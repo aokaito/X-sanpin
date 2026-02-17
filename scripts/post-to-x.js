@@ -79,11 +79,11 @@ function generateOAuthHeader(method, url) {
 // X API v2でツイートを投稿
 function postTweet(text) {
   return new Promise((resolve, reject) => {
-    const url = 'https://api.x.com/2/tweets';
+    const url = 'https://api.twitter.com/2/tweets';
     const data = JSON.stringify({ text });
 
     const options = {
-      hostname: 'api.x.com',
+      hostname: 'api.twitter.com',
       port: 443,
       path: '/2/tweets',
       method: 'POST',
