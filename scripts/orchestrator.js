@@ -80,11 +80,34 @@ function createIssue(title, body) {
   return result.trim();
 }
 
-// JSONをパースする（コードブロックを除去）
+// JSONをパースする（コードブロックを除去し、JSON部分のみ抽出）
 function parseJSON(text) {
   // ```json ... ``` を除去
-  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  return JSON.parse(cleaned);
+  let cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  // JSON オブジェクトを抽出（最初の { から対応する } まで）
+  const startIndex = cleaned.indexOf('{');
+  if (startIndex === -1) {
+    throw new Error('JSONが見つかりません: ' + cleaned.substring(0, 100));
+  }
+
+  let braceCount = 0;
+  let endIndex = -1;
+  for (let i = startIndex; i < cleaned.length; i++) {
+    if (cleaned[i] === '{') braceCount++;
+    if (cleaned[i] === '}') braceCount--;
+    if (braceCount === 0) {
+      endIndex = i;
+      break;
+    }
+  }
+
+  if (endIndex === -1) {
+    throw new Error('JSONの終端が見つかりません');
+  }
+
+  const jsonStr = cleaned.substring(startIndex, endIndex + 1);
+  return JSON.parse(jsonStr);
 }
 
 // Agent 1: リサーチャー

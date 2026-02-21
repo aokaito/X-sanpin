@@ -14,10 +14,17 @@ function extractTweetContent(issueBody) {
     throw new Error('Issue本文が空です');
   }
 
-  // HTMLコメントを除去し、前後の空白をトリム
-  const content = issueBody
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .trim();
+  // HTMLコメントを除去
+  let content = issueBody.replace(/<!--[\s\S]*?-->/g, '');
+
+  // 「---」以降のメタデータを除去
+  const separatorIndex = content.indexOf('\n---');
+  if (separatorIndex !== -1) {
+    content = content.substring(0, separatorIndex);
+  }
+
+  // 前後の空白をトリム
+  content = content.trim();
 
   if (!content) {
     throw new Error('投稿内容が空です');
