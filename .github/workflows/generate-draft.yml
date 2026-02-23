@@ -2,9 +2,20 @@ name: Generate Draft Posts
 
 on:
   schedule:
-    # 毎朝9:00 JST (UTC 0:00)
-    - cron: '0 0 * * *'
+    # 毎日12:00 JST (UTC 3:00)
+    - cron: '0 3 * * *'
+    # 毎日19:00 JST (UTC 10:00)
+    - cron: '0 10 * * *'
   workflow_dispatch: # 手動実行も可能
+    inputs:
+      scheduled_time:
+        description: '投稿予定時刻'
+        required: false
+        default: '12:00'
+        type: choice
+        options:
+          - '12:00'
+          - '19:00'
 
 jobs:
   generate:
@@ -21,9 +32,24 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Determine scheduled time
+        id: determine-time
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "time=${{ inputs.scheduled_time }}" >> $GITHUB_OUTPUT
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "03" ]; then
+              echo "time=12:00" >> $GITHUB_OUTPUT
+            else
+              echo "time=19:00" >> $GITHUB_OUTPUT
+            fi
+          fi
+
       - name: Run Agent Teams orchestrator
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          SCHEDULED_TIME: ${{ steps.determine-time.outputs.time }}
         run: node scripts/orchestrator.js
