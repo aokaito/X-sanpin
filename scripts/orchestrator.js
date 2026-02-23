@@ -6,6 +6,7 @@ const { execSync } = require('child_process');
 // 環境変数
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
+const SCHEDULED_TIME = process.env.SCHEDULED_TIME || '12:00';
 
 // プロンプトファイルの読み込み
 function loadPrompt(agentName) {
@@ -68,6 +69,46 @@ function getRecentIssues() {
   }
 }
 
+// Annotuneの最近の変更を取得
+function getAnnotuneRecentChanges() {
+  return new Promise((resolve) => {
+    const options = {
+      hostname: 'api.github.com',
+      port: 443,
+      path: '/repos/aokaito/annotune/commits?per_page=7',
+      method: 'GET',
+      headers: {
+        'User-Agent': 'X-sanpin-bot',
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', (chunk) => body += chunk);
+      res.on('end', () => {
+        if (res.statusCode === 200) {
+          try {
+            const commits = JSON.parse(body);
+            const summary = commits.map(c =>
+              `- ${c.commit.message.split('\n')[0]} (${c.commit.author.date.split('T')[0]})`
+            ).join('\n');
+            resolve(summary);
+          } catch (e) {
+            resolve(null);
+          }
+        } else {
+          console.log(`Annotune GitHub API: ${res.statusCode}`);
+          resolve(null);
+        }
+      });
+    });
+
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
 // GitHub Issue作成
 function createIssue(title, body) {
   const escapedTitle = title.replace(/"/g, '\\"').replace(/`/g, '\\`');
@@ -111,7 +152,7 @@ function parseJSON(text) {
 }
 
 // Agent 1: リサーチャー
-async function runResearcher(recentIssues) {
+async function runResearcher(recentIssues, scheduledTime) {
   console.log('\n🔍 [Agent 1] リサーチャー起動...');
 
   const systemPrompt = loadPrompt('researcher');
@@ -124,7 +165,10 @@ async function runResearcher(recentIssues) {
 
 ${issuesSummary}
 
-今日の投稿テーマを提案してください。1〜2件のテーマをJSON形式で出力してください。`;
+## 今日の投稿設定
+- 投稿予定時刻: **${scheduledTime}**
+
+今日の投稿テーマを **1件のみ** 提案してください。JSON形式で出力してください。`;
 
   const response = await callClaude(systemPrompt, userMessage);
   console.log('リサーチャー応答:', response.substring(0, 200) + '...');
@@ -133,17 +177,21 @@ ${issuesSummary}
 }
 
 // Agent 2: ライター
-async function runWriter(theme) {
+async function runWriter(theme, annotuneChanges) {
   console.log(`\n✍️  [Agent 2] ライター起動... テーマ: ${theme.theme}`);
 
   const systemPrompt = loadPrompt('writer');
+
+  const annotuneContext = annotuneChanges
+    ? `\n\n## Annotuneの最近の変更（Annotune関連の投稿を作る場合は必ずここから事実を参照してください）\n${annotuneChanges}`
+    : '';
 
   const userMessage = `## 投稿テーマ
 
 - カテゴリ: ${theme.category}
 - テーマ: ${theme.theme}
 - 切り口: ${theme.angle}
-- 投稿予定時刻: ${theme.scheduledTime}
+- 投稿予定時刻: ${theme.scheduledTime}${annotuneContext}
 
 このテーマでKaitoとして自然な投稿を1件作成してください。`;
 
@@ -181,6 +229,7 @@ ${draft}
 // メイン処理
 async function main() {
   console.log('=== X投稿下書き生成 Agent Teams ===\n');
+  console.log(`投稿予定時刻: ${SCHEDULED_TIME}`);
 
   if (!ANTHROPIC_API_KEY) {
     throw new Error('ANTHROPIC_API_KEYが設定されていません');
@@ -190,12 +239,16 @@ async function main() {
     throw new Error('GITHUB_REPOSITORYが設定されていません');
   }
 
-  // 直近のIssue取得
-  const recentIssues = getRecentIssues();
+  // 直近のIssue取得とAnnotune最近の変更を並行取得
+  const [recentIssues, annotuneChanges] = await Promise.all([
+    Promise.resolve(getRecentIssues()),
+    getAnnotuneRecentChanges()
+  ]);
   console.log(`直近のIssue: ${recentIssues.length}件`);
+  console.log(`Annotune最近の変更: ${annotuneChanges ? '取得成功' : '取得失敗（スキップ）'}`);
 
   // Agent 1: リサーチャー
-  const researchResult = await runResearcher(recentIssues);
+  const researchResult = await runResearcher(recentIssues, SCHEDULED_TIME);
   console.log(`\n分析結果: ${researchResult.analysis}`);
   console.log(`提案テーマ数: ${researchResult.themes.length}件`);
 
@@ -205,7 +258,7 @@ async function main() {
     console.log(`\n--- テーマ ${i + 1}/${researchResult.themes.length}: ${theme.theme} ---`);
 
     // Agent 2: ライター
-    const draft = await runWriter(theme);
+    const draft = await runWriter(theme, annotuneChanges);
 
     // Agent 3: エディター
     const editResult = await runEditor(draft, theme);
