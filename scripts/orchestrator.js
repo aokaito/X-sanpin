@@ -14,6 +14,38 @@ function loadPrompt(agentName) {
   return fs.readFileSync(promptPath, 'utf-8');
 }
 
+// フィードバック履歴の読み込み
+function loadFeedback() {
+  const feedbackPath = path.join(__dirname, '..', 'knowledge', 'feedback-log.json');
+  try {
+    const data = fs.readFileSync(feedbackPath, 'utf-8');
+    const feedback = JSON.parse(data);
+    // 直近10件のみ返す
+    return feedback.entries.slice(-10);
+  } catch (error) {
+    console.log('フィードバック履歴なし（初回実行の可能性）');
+    return [];
+  }
+}
+
+// ナレッジの読み込み
+function loadKnowledge() {
+  const knowledgeDir = path.join(__dirname, '..', 'knowledge');
+  const knowledge = {};
+
+  const files = ['guidelines.md', 'ng-patterns.md', 'good-examples.md'];
+  for (const file of files) {
+    const filePath = path.join(knowledgeDir, file);
+    try {
+      knowledge[file.replace('.md', '')] = fs.readFileSync(filePath, 'utf-8');
+    } catch (error) {
+      // ファイルがない場合はスキップ
+    }
+  }
+
+  return knowledge;
+}
+
 // Anthropic API呼び出し
 function callClaude(systemPrompt, userMessage) {
   return new Promise((resolve, reject) => {
@@ -176,9 +208,68 @@ ${issuesSummary}
   return parseJSON(response);
 }
 
-// Agent 2: ライター
-async function runWriter(theme, annotuneChanges) {
-  console.log(`\n✍️  [Agent 2] ライター起動... テーマ: ${theme.theme}`);
+// Agent 2: ストラテジスト
+async function runStrategist(researchResult, feedbackEntries, knowledge) {
+  console.log('\n📊 [Agent 2] ストラテジスト起動...');
+
+  const systemPrompt = loadPrompt('strategist');
+
+  // フィードバック履歴のサマリーを作成
+  let feedbackSummary = '（フィードバック履歴なし - 初回または蓄積前）';
+  if (feedbackEntries.length > 0) {
+    feedbackSummary = feedbackEntries.map(entry => {
+      let summary = `- [${entry.date}] ${entry.category}: `;
+      if (entry.wasModified) {
+        summary += `修正あり（理由: ${entry.feedbackReason || '未記載'}）`;
+      } else {
+        summary += '修正なしで承認';
+      }
+      return summary;
+    }).join('\n');
+  }
+
+  // ナレッジのサマリーを作成
+  let knowledgeSummary = '';
+  if (knowledge.guidelines) {
+    knowledgeSummary += `\n### ガイドライン\n${knowledge.guidelines.substring(0, 500)}...\n`;
+  }
+  if (knowledge['ng-patterns']) {
+    knowledgeSummary += `\n### NGパターン\n${knowledge['ng-patterns'].substring(0, 500)}...\n`;
+  }
+  if (knowledge['good-examples']) {
+    knowledgeSummary += `\n### 良い投稿例\n${knowledge['good-examples'].substring(0, 500)}...\n`;
+  }
+
+  const theme = researchResult.themes[0];
+  const userMessage = `## リサーチャーの分析結果
+
+${researchResult.analysis}
+
+## 提案されたテーマ
+
+- カテゴリ: ${theme.category}
+- テーマ: ${theme.theme}
+- 切り口: ${theme.angle}
+- 投稿予定時刻: ${theme.scheduledTime}
+
+## フィードバック履歴（直近の修正状況）
+
+${feedbackSummary}
+
+## ナレッジ
+${knowledgeSummary}
+
+このテーマに対する投稿戦略を立案してください。JSON形式で出力してください。`;
+
+  const response = await callClaude(systemPrompt, userMessage);
+  console.log('ストラテジスト応答:', response.substring(0, 200) + '...');
+
+  return parseJSON(response);
+}
+
+// Agent 3: ライター
+async function runWriter(theme, annotuneChanges, strategy) {
+  console.log(`\n✍️  [Agent 3] ライター起動... テーマ: ${theme.theme}`);
 
   const systemPrompt = loadPrompt('writer');
 
@@ -186,12 +277,27 @@ async function runWriter(theme, annotuneChanges) {
     ? `\n\n## Annotuneの最近の変更（Annotune関連の投稿を作る場合は必ずここから事実を参照してください）\n${annotuneChanges}`
     : '';
 
+  // ストラテジストからの指示を追加
+  let strategyContext = '';
+  if (strategy) {
+    strategyContext = `\n\n## ストラテジストからの指示
+
+### 今回の戦略
+${strategy.strategyForTheme || ''}
+
+### 具体的な指示
+${(strategy.writerInstructions || []).map(i => `- ${i}`).join('\n')}
+
+### 避けるべきパターン
+${(strategy.avoidPatterns || []).map(p => `- ${p}`).join('\n')}`;
+  }
+
   const userMessage = `## 投稿テーマ
 
 - カテゴリ: ${theme.category}
 - テーマ: ${theme.theme}
 - 切り口: ${theme.angle}
-- 投稿予定時刻: ${theme.scheduledTime}${annotuneContext}
+- 投稿予定時刻: ${theme.scheduledTime}${strategyContext}${annotuneContext}
 
 このテーマでKaitoとして自然な投稿を1件作成してください。`;
 
@@ -201,16 +307,23 @@ async function runWriter(theme, annotuneChanges) {
   return response.trim();
 }
 
-// Agent 3: エディター
-async function runEditor(draft, theme) {
-  console.log('\n📝 [Agent 3] エディター起動...');
+// Agent 4: エディター
+async function runEditor(draft, theme, strategy) {
+  console.log('\n📝 [Agent 4] エディター起動...');
 
   const systemPrompt = loadPrompt('editor');
+
+  // ストラテジストからのチェックポイントを追加
+  let strategyContext = '';
+  if (strategy && strategy.editorCheckpoints) {
+    strategyContext = `\n\n## ストラテジストからの特別チェックポイント
+${strategy.editorCheckpoints.map(c => `- ${c}`).join('\n')}`;
+  }
 
   const userMessage = `## レビュー対象の投稿
 
 カテゴリ: ${theme.category}
-テーマ: ${theme.theme}
+テーマ: ${theme.theme}${strategyContext}
 
 ---
 
@@ -228,7 +341,7 @@ ${draft}
 
 // メイン処理
 async function main() {
-  console.log('=== X投稿下書き生成 Agent Teams ===\n');
+  console.log('=== X投稿下書き生成 Agent Teams (4Agent) ===\n');
   console.log(`投稿予定時刻: ${SCHEDULED_TIME}`);
 
   if (!ANTHROPIC_API_KEY) {
@@ -239,29 +352,38 @@ async function main() {
     throw new Error('GITHUB_REPOSITORYが設定されていません');
   }
 
-  // 直近のIssue取得とAnnotune最近の変更を並行取得
+  // 直近のIssue取得、Annotune最近の変更、フィードバック、ナレッジを並行取得
   const [recentIssues, annotuneChanges] = await Promise.all([
     Promise.resolve(getRecentIssues()),
     getAnnotuneRecentChanges()
   ]);
+  const feedbackEntries = loadFeedback();
+  const knowledge = loadKnowledge();
+
   console.log(`直近のIssue: ${recentIssues.length}件`);
   console.log(`Annotune最近の変更: ${annotuneChanges ? '取得成功' : '取得失敗（スキップ）'}`);
+  console.log(`フィードバック履歴: ${feedbackEntries.length}件`);
+  console.log(`ナレッジ: ${Object.keys(knowledge).length}ファイル`);
 
   // Agent 1: リサーチャー
   const researchResult = await runResearcher(recentIssues, SCHEDULED_TIME);
   console.log(`\n分析結果: ${researchResult.analysis}`);
   console.log(`提案テーマ数: ${researchResult.themes.length}件`);
 
-  // 各テーマについて Agent 2 & 3 を実行
+  // Agent 2: ストラテジスト
+  const strategy = await runStrategist(researchResult, feedbackEntries, knowledge);
+  console.log(`\n戦略: ${strategy.strategyForTheme || ''}`);
+
+  // 各テーマについて Agent 3 & 4 を実行
   for (let i = 0; i < researchResult.themes.length; i++) {
     const theme = researchResult.themes[i];
     console.log(`\n--- テーマ ${i + 1}/${researchResult.themes.length}: ${theme.theme} ---`);
 
-    // Agent 2: ライター
-    const draft = await runWriter(theme, annotuneChanges);
+    // Agent 3: ライター
+    const draft = await runWriter(theme, annotuneChanges, strategy);
 
-    // Agent 3: エディター
-    const editResult = await runEditor(draft, theme);
+    // Agent 4: エディター
+    const editResult = await runEditor(draft, theme, strategy);
 
     console.log(`\n編集結果:`);
     console.log(`  - 承認: ${editResult.approved ? 'OK' : 'NG'}`);
@@ -283,6 +405,15 @@ ${editResult.finalDraft}
 **カテゴリ:** ${theme.category}
 **テーマ:** ${theme.theme}
 **文字数:** ${editResult.charCount}字
+
+---
+## フィードバック記録（修正時に記入）
+
+### 修正前
+<!-- 修正した場合、元の投稿内容をここに記載してください -->
+
+### 修正理由
+<!-- なぜ修正したのかを記載してください（例：もう少しカジュアルに、具体例を追加、など） -->
 `;
 
     const issueUrl = createIssue(title, issueBody);
