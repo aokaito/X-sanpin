@@ -184,7 +184,7 @@ function parseJSON(text) {
 }
 
 // Agent 1: リサーチャー
-async function runResearcher(recentIssues, scheduledTime) {
+async function runResearcher(recentIssues, scheduledTime, annotuneChanges) {
   console.log('\n🔍 [Agent 1] リサーチャー起動...');
 
   const systemPrompt = loadPrompt('researcher');
@@ -193,12 +193,16 @@ async function runResearcher(recentIssues, scheduledTime) {
     ? recentIssues.map(i => `- ${i.title}`).join('\n')
     : '（直近の投稿履歴なし - 初回実行）';
 
+  const annotuneContext = annotuneChanges
+    ? `\n\n## Annotuneの最近の変更履歴\n${annotuneChanges}`
+    : '';
+
   const userMessage = `## 直近のIssue一覧（過去の投稿テーマ）
 
 ${issuesSummary}
 
 ## 今日の投稿設定
-- 投稿予定時刻: **${scheduledTime}**
+- 投稿予定時刻: **${scheduledTime}**${annotuneContext}
 
 今日の投稿テーマを **1件のみ** 提案してください。JSON形式で出力してください。`;
 
@@ -366,7 +370,7 @@ async function main() {
   console.log(`ナレッジ: ${Object.keys(knowledge).length}ファイル`);
 
   // Agent 1: リサーチャー
-  const researchResult = await runResearcher(recentIssues, SCHEDULED_TIME);
+  const researchResult = await runResearcher(recentIssues, SCHEDULED_TIME, annotuneChanges);
   console.log(`\n分析結果: ${researchResult.analysis}`);
   console.log(`提案テーマ数: ${researchResult.themes.length}件`);
 

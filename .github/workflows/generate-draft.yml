@@ -2,20 +2,23 @@ name: Generate Draft Posts
 
 on:
   schedule:
+    # 毎日8:00 JST (UTC 23:00 前日)
+    - cron: '0 23 * * *'
     # 毎日12:00 JST (UTC 3:00)
     - cron: '0 3 * * *'
-    # 毎日19:00 JST (UTC 10:00)
-    - cron: '0 10 * * *'
+    # 毎日17:00 JST (UTC 8:00)
+    - cron: '0 8 * * *'
   workflow_dispatch: # 手動実行も可能
     inputs:
       scheduled_time:
         description: '投稿予定時刻'
         required: false
-        default: '12:00'
+        default: '08:00'
         type: choice
         options:
+          - '08:00'
           - '12:00'
-          - '19:00'
+          - '17:00'
 
 jobs:
   generate:
@@ -39,10 +42,12 @@ jobs:
             echo "time=${{ inputs.scheduled_time }}" >> $GITHUB_OUTPUT
           else
             HOUR=$(date -u +%H)
-            if [ "$HOUR" = "03" ]; then
+            if [ "$HOUR" = "23" ]; then
+              echo "time=08:00" >> $GITHUB_OUTPUT
+            elif [ "$HOUR" = "03" ]; then
               echo "time=12:00" >> $GITHUB_OUTPUT
             else
-              echo "time=19:00" >> $GITHUB_OUTPUT
+              echo "time=17:00" >> $GITHUB_OUTPUT
             fi
           fi
 
